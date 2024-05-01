@@ -1,8 +1,9 @@
-#dir.create("Individual_genes")
-#dir.create("Individual_genes_aligned")
-#dir.create("Individual_genes_aligned_trimmed")
-#dir.create("Individual_genes_gaps_filled")
-#dir.create("Individual_genes_translated")
+dir.create("Individual_genes")
+dir.create("Individual_genes_aligned")
+dir.create("Individual_genes_aligned_trimmed")
+dir.create("Individual_genes_gaps_filled")
+dir.create("Individual_genes_gaps_filled/_Genes_need_more_check")
+dir.create("Individual_genes_translated")
 
 library(ape)
 library(seqinr)
@@ -11,37 +12,38 @@ library(Biostrings)
 library(stringr)
 
 # obtain a list of gene names
-Thorny_reference <- read.fasta(file = "Callo2Thorny.fasta", seqtype = "DNA", as.string = TRUE,
+The_reference <- read.fasta(file = "Data/Scyliorhinus_1266_gene_list_revised.txt", seqtype = "DNA", as.string = TRUE,
                                forceDNAtolower = FALSE,set.attributes = FALSE)
-Gene_names_1266 <- names(Thorny_reference)
+Gene_names_1266 <- names(The_reference)
 
 # import the fasta file that contains all gene-captured sequences for multiple samples
-Seq_list <- read.fasta(file = "Four_species_plus_thorny_all_genes.fasta",
+Seq_list <- read.fasta(file = "Data/Poroderma_8_species_all_genes.txt",
            seqtype = "DNA", as.string = TRUE,forceDNAtolower = FALSE,set.attributes = FALSE)
 
 Gene_to_list <- lapply(1:length(Gene_names_1266), function (x ) grep(Gene_names_1266[x], names(Seq_list)))
 
 
-# to make a matrix show which sample miss which gene
+# to make a matrix showing which sample miss which gene
 Sample_list <- unique(gsub("_.*","",names(Seq_list)))  # to get the list of sample names (GN numbers)
 Gene_sample_matrix <- lapply(1:length(Gene_names_1266), function (x ) Sample_list %in% gsub("_.*","",names(Seq_list[Gene_to_list[[x]]])))
 
-Gene_sample_matrix2 <- as.data.frame(Gene_sample_matrix)
+Gene_sample_matrix2 <- data.frame(lapply(as.data.frame(Gene_sample_matrix), function(x) {gsub("TRUE","Captured", gsub("FALSE","_", x))}))
 colnames(Gene_sample_matrix2) <- Gene_names_1266
-rownames(Gene_sample_matrix2) <- Sample_list
+rownames(Gene_sample_matrix2) <- Sample_list                         
 
 write.csv(t(Gene_sample_matrix2), "The_gene_sample_matrix.csv", row.names = TRUE)  # must use write.csv; table is transposed
 
-# make a list to show the gene that can only be found in the reference
+
+# make a list to show the genes not captured in any sample (only in the reference)
 Gene_in_one_sample <- list()
 for (i in 1:length(Gene_names_1266))
   {
-  if (length(Gene_to_list[[i]])==1) 
+  if (length(Gene_to_list[[i]])==1)
     {
     Gene_in_one_sample<- append(Gene_in_one_sample,Gene_names_1266[i])
     }
-}
-write.table(Gene_in_one_sample, "List_of_genes_that_only_found_in_one_sample.csv",
+  }
+write.table(Gene_in_one_sample, "List_of_genes_not_captured_in_any_sample.csv",
             append = FALSE, quote = FALSE, sep = "\n", row.names = FALSE, col.names = FALSE)
 
 # write in the folder "Individual_genes" DNA sequences sorted by gene
@@ -57,7 +59,7 @@ for (i in 1:length(Gene_names_1266))
   {
   seqs <- readDNAStringSet(paste0("Individual_genes/", Indiv_genes[i]))
   names(seqs) <- gsub("_.*","",names(seqs))                              # keep only GN numbers in the sample name
-  if (length(seqs)==1) {next}                                            # skip the gene that can only be found in the reference
+  if (length(seqs)<3) {next}                                            # skip the gene that can only be found in a small number of samples. Important parameter !!!!!!!
   seqs_gapless <- RemoveGaps(seqs, removeGaps = "all")
   writeXStringSet(AlignSeqs(seqs_gapless), file=paste0("Individual_genes_aligned/Aligned_", Indiv_genes[i]))
 }
@@ -92,8 +94,8 @@ for (i in 1:length(Indiv_align))
   Char_in_gene <- sum(nchar(seq_chr))
 
   Percent_ambiguity <- append(Percent_ambiguity,round(Number_ambiguity*100/Char_in_gene,digits = 1))
-  Gene_name_short0 <- gsub("Aligned_List_of_Amblyraja_", "", (gsub("[:.:].*","", Indiv_align[i])))
-  Seq_name<- append(Seq_name, Gene_name_short0)
+  Gene_name_short <- gsub("[:.:].*","", Indiv_align[i])
+  Seq_name<- append(Seq_name, Gene_name_short)
 }
 
 ambiguity_list <- as.data.frame(cbind(Seq_name,Percent_ambiguity))
@@ -102,7 +104,6 @@ List_ambiguity_sorted_chr <- apply(List_ambiguity_sorted,2,as.character)  # make
 
 write.table(List_ambiguity_sorted_chr, "Percentage_of_ambiguous_nucleotides_found_in_each_gene.csv",append = FALSE, quote = FALSE, sep = ",", 
             row.names = FALSE, col.names = TRUE)
-
 
 
 # translate each individual gene alignment into aa sequences
@@ -133,20 +134,45 @@ for (i in 1:length(Gene_align))
   
   Gene_noGap0 <- DNAStringSet(gsub("-", "N", Single_gene_align))           # replace gaps with N
   
-  writeXStringSet(Gene_noGap0, file=paste0("Individual_genes_gaps_filled/Gapless_", Gene_align[i]))
+  Gene_noGap1 <- xscat(N_to_add,Gene_noGap0)           # shift the reading frame 0-2 nucleotides; lost names
+  #Gene_noGap1 <- DNAStringSet(paste0(N_to_add,Gene_noGap0))           # also works; lost names
   
-  Gene_noGap <- xscat(N_to_add,Gene_noGap0)           # shift the reading frame 0-2 nucleotides; lost names
-  #Gene_noGap <- DNAStringSet(paste0(N_to_add,Gene_noGap0))           # also works; lost names
-  names(Gene_noGap) <- names(Gene_noGap0)           # assign names again
-  aa_sequence <- translate(Gene_noGap, genetic.code=GENETIC_CODE, no.init.codon=FALSE,if.fuzzy.codon="solve")
+  # make all ORF starts from 1
+  if (Best_ORF==1) {
+    Gene_noGap2 <- Gene_noGap1
+    }
+  
+  if (Best_ORF==2 | Best_ORF==3 ) {
+    Gene_noGap2 <- subseq(Gene_noGap1, start = 4)
+  }
+  
+  # make the length of each alignment dividable by 3
+  if (width(Gene_noGap2[1])%%3==0) {
+    Gene_noGap2 <- Gene_noGap2
+  }
+  
+  if (width(Gene_noGap2[1])%%3==1) {
+    Gene_noGap2 <- subseq(Gene_noGap2, end=width(Gene_noGap2[1])-1)
+  }
+  
+  if (width(Gene_noGap2[1])%%3==2) {
+    Gene_noGap2 <- subseq(Gene_noGap2, end=width(Gene_noGap2[1])-2)
+  }
+  
+  names(Gene_noGap2) <- names(Gene_noGap0)           # assign names again
+  
+  writeXStringSet(Gene_noGap2, file=paste0("Individual_genes_gaps_filled/Gapless_", Gene_align[i]))
+  
+  aa_sequence <- translate(Gene_noGap2, genetic.code=GENETIC_CODE, no.init.codon=FALSE,if.fuzzy.codon="solve")
   
   writeXStringSet(aa_sequence,file=paste0("Individual_genes_translated/","AA_", Gene_align[i]))
   
   Number_stop_gene <- sum(str_count(str_sub(as.character(aa_sequence), 1,), "\\*"))  # count the total number of stop codons in an alignment
   Number_stop <- append(Number_stop,Number_stop_gene)
   
-  Gene_name_short <- gsub("Trimmed_Aligned_List_of_Amblyraja_", "", (gsub("[:.:].*","", Gene_align[i])))
-  Seq_name_list<- append(Seq_name_list, Gene_name_short)
+  #Gene_name_short <- gsub("Trimmed_Aligned_List_of_", "", (gsub("[:.:].*","", Gene_align[i])))
+  Gene_name_gapless <- paste0("Gapless_",Gene_align[i])
+  Seq_name_list<- append(Seq_name_list, Gene_name_gapless)
 }
 
 stop_list <- as.data.frame(cbind(Seq_name_list,Number_stop))
@@ -156,6 +182,25 @@ List_stop_sorted_chr <- apply(List_stop_sorted,2,as.character)  # make a datafra
 write.table(List_stop_sorted_chr, "List_of_stop_codons_found_in_each_gene.csv",append = FALSE, quote = FALSE, sep = ",", 
             row.names = FALSE, col.names = TRUE)
 
+# Move genes with stop codon detected to the folder "_Genes_need_more_check"
+Gene_recheck <- stop_list$Seq_name_list[which(stop_list$Number_stop>0)]
+
+for (i in 1:length(Gene_recheck)){
+  file.rename(from =paste0("Individual_genes_gaps_filled/",Gene_recheck[i]),
+              to=paste0("Individual_genes_gaps_filled/_Genes_need_more_check/",Gene_recheck[i]))
+}
+
+# Move genes with too many ambiguous sites (including "-" and "N") to the folder "_Genes_need_more_check"
+High_ambiguity <- ambiguity_list$Seq_name[which(ambiguity_list$Percent_ambiguity>=10)]
+High_ambiguity_unique <- setdiff(as.list(paste0("Gapless_Trimmed_",High_ambiguity,".fasta")),Gene_recheck) # exclude those already moved to the folder due to stop codons
+
+for (i in 1:length(High_ambiguity_unique)){
+  file.rename(from =paste0("Individual_genes_gaps_filled/",High_ambiguity_unique[i]),
+              to=paste0("Individual_genes_gaps_filled/_Genes_need_more_check/",High_ambiguity_unique[i]))
+}
+
+
+
 
 ######################################################################################################################################
 # The following codes are for concatenating genes
@@ -164,7 +209,8 @@ write.table(List_stop_sorted_chr, "List_of_stop_codons_found_in_each_gene.csv",a
 
 Genes_to_concat <- list.files(path="Genes_to_concatenate/.", pattern=".fasta")      # place genes you want to concatenate in the folder
 
-sample_to_concat <- c("Amblyraja","GN22813","GN22829","GN22833","GN22834")              # this is the final list of samples
+#sample_to_concat <- c("Amblyraja","GN22813","GN22829","GN22833","GN22834")              # this is the final list of samples
+sample_to_concat <- Sample_list
 
 # some sample missing some genes. Need to add those genes in and their sequences contain only "N"
 for (i in 1:length(Genes_to_concat))
@@ -182,6 +228,22 @@ for (i in 1:length(Genes_to_concat))
               file.out = paste0("Genes_to_concatenate/__Revised_",Genes_to_concat[i]))
 }
 
+
+# To double check if each of the gene to be concatenated is dividable by 3
+Check_ORF <- list()
+for (i in 1:length(Genes_to_concat))
+{
+  Gene_seq <- read.fasta(file = paste0("Genes_to_concatenate/",Genes_to_concat[i]), seqtype = "DNA", 
+                         as.string = TRUE,forceDNAtolower = FALSE,set.attributes = FALSE)
+  if (nchar(Gene_seq$Reference)%%3!=0)
+    {
+     Check_ORF <- append(Check_ORF, paste0(nchar(Gene_seq$Reference)/3, "_", Genes_to_concat[i]))
+    }
+}
+write.table(Check_ORF,file = "Check_ORF_results.txt", append = FALSE, quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+
+
 # put all revised sequences into one file and then concatenate genes by sample names
 Gene_concat_all <- lapply(1:length(Genes_to_concat), function (x) read.fasta(file = paste0("Genes_to_concatenate/__Revised_",Genes_to_concat[x]), 
                             seqtype = "DNA", as.string = TRUE,forceDNAtolower = FALSE,set.attributes = FALSE))
@@ -198,9 +260,16 @@ for (i in 1:length(sample_to_concat))
   All_gene_concat <- append(All_gene_concat, One_gene_concat)
 }
 
-names(All_gene_concat) <- sample_to_concat
+# Replace GN numbers with real species names
+Species_fullname <- read.table("Data/List_of_species_names.csv")
+#Species_fullnameGN <- lapply(1:nrow(Species_fullname), function (x) gsub(".*_GN","GN",Species_fullname$V1[x]))     # if GN number in the back
+Species_fullnameGN <- lapply(1:nrow(Species_fullname), function (x) gsub("_.*","",Species_fullname$V1[x]))      # if GN number in the front
 
-write.fasta(sequences = All_gene_concat, names = sample_to_concat, file.out = paste0("Genes_to_concatenate/Concatenated_gene_sequences.txt"))
+matched_full <- lapply(2:(nrow(Species_fullname)+1), function (x) Species_fullname$V1[which(Species_fullnameGN==sample_to_concat[x])])
+
+write.fasta(sequences = All_gene_concat, names = c("Reference", unlist(matched_full)), file.out = paste0("Concatenated_gene_sequences.txt"))
+
+unlink("Genes_to_concatenate/__Revised_*")
 
 
 
